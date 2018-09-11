@@ -3,6 +3,7 @@
 
 
 #include <unistd.h>
+#include <stdint.h>
 struct imap_context;
 
 
