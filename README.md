@@ -1,5 +1,7 @@
 # lua profile lib
 
+profile c and lua fucntion expect tail call and coroutine yield.
+
 ~~~.lua
 local profile = require "profile"
 
