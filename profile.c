@@ -1,4 +1,3 @@
-#include <lua.h>
 #include <unistd.h>
 #include <lauxlib.h>
 #include <time.h> 
@@ -345,7 +344,7 @@ _item2table(lua_State* L, struct record_item* v) {
 
 static int
 _lstop(lua_State* L) {
-    lua_sethook(L, NULL, 0, 0);
+    // lua_sethook(L, NULL, 0, 0);
     struct profile_context* context = _get_profile(L);
     size_t sz = context->record_pool.cap;
     size_t count = (size_t)luaL_optinteger(L, 1, sz);
