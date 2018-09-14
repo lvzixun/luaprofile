@@ -390,6 +390,20 @@ _lprofile_gc(lua_State* L) {
 }
 
 
+static int
+_lpause(lua_State* L) {
+    lua_sethook(L, NULL, 0, 0);
+    return 0;
+}
+
+
+static int
+_lresume(lua_State* L) {
+    lua_sethook(L, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
+    return 0;
+}
+
+
 int
 luaopen_profile_c(lua_State* L) {
     luaL_checkversion(L);
@@ -409,6 +423,8 @@ luaopen_profile_c(lua_State* L) {
      luaL_Reg l[] = {
         {"start", _lstart},
         {"stop", _lstop},
+        {"pause", _lpause},
+        {"resume", _lresume},
         {NULL, NULL},
     };
     luaL_newlib(L, l);

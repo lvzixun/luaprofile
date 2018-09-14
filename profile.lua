@@ -3,6 +3,8 @@ local c = require "profile.c"
 local M = {
     start = c.start,
     stop = c.stop,
+    pause = c.pause,
+    resume = c.resume,
 }
 
 function M.dump(records)
