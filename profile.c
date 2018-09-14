@@ -37,6 +37,7 @@ struct call_frame {
     const void* point;
     const char* source;
     const char* name;
+    bool  tail;
     char flag;
     int line;
     double record_time;
@@ -233,10 +234,11 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
     }
 
     struct profile_context* context = _get_profile(L);
-    if(event == LUA_HOOKCALL) {
+    if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
         struct call_frame* frame = push_callinfo(context);
         frame->point = point;
         frame->flag = flag;
+        frame->tail = event == LUA_HOOKTAILCALL;
         frame->source = (source)?(source):("null");
         frame->name = (name)?(name):("null");
         frame->line = line;
@@ -249,20 +251,26 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         if(len <= 0) {
             return;
         }
-        struct call_frame* cur_frame = pop_callinfo(context);
-        if(cur_frame->point == point) {
-            double total_cost = cur_time - cur_frame->call_time;
-            double real_cost = total_cost - cur_frame->sub_cost;
-            cur_frame->ret_time = cur_time;
-            cur_frame->real_cost = real_cost;
-            record_item_add(context, cur_frame);
-            struct call_frame* pre_frame = cur_callinfo(context);
-            if(pre_frame) {
-                double c = pre_frame->sub_cost;
-                double s = gettime() - cur_frame->record_time;
-                pre_frame->sub_cost = c + s;
+        bool tail_call = false;
+        do {
+            struct call_frame* cur_frame = pop_callinfo(context);
+            if(cur_frame->point == point || tail_call) {
+                double total_cost = cur_time - cur_frame->call_time;
+                double real_cost = total_cost - cur_frame->sub_cost;
+                cur_frame->ret_time = cur_time;
+                cur_frame->real_cost = real_cost;
+                record_item_add(context, cur_frame);
+                struct call_frame* pre_frame = cur_callinfo(context);
+                if(pre_frame) {
+                    tail_call = cur_frame->tail;
+                    cur_time = gettime();
+                    double s = cur_time - cur_frame->record_time;
+                    pre_frame->sub_cost += s;
+                }else {
+                    tail_call = false;
+                }
             }
-        }
+        }while(tail_call);
     }
 }
 
