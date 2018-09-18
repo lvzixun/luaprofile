@@ -55,6 +55,7 @@ struct profile_context {
     } record_pool;
     struct imap_context* imap;
 
+    bool start;
     int top;
     struct call_frame call_info[0];
 };
@@ -65,6 +66,7 @@ profile_create() {
     struct profile_context* context = (struct profile_context*)pmalloc(
         sizeof(struct profile_context)+sizeof(struct call_frame)*MAX_CALL_SIZE);
     context->top = 0;
+    context->start = false;
     context->imap = imap_create();
     context->record_pool.pool = (struct record_item*)pmalloc(sizeof(struct record_item)*DEFAULT_POOL_ITEM_COUNT);
     context->record_pool.sz = DEFAULT_POOL_ITEM_COUNT;
@@ -203,6 +205,11 @@ _self(lua_State* L) {
 static void
 _resolve_hook(lua_State* L, lua_Debug* arv) {
     double cur_time = gettime();
+    struct profile_context* context = _get_profile(L);
+    if(!context->start) {
+        return;
+    }
+
     int event = arv->event;
     lua_Debug ar;
     int ret = lua_getstack(L, 0, &ar);
@@ -233,7 +240,6 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         return;
     }
 
-    struct profile_context* context = _get_profile(L);
     if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
         struct call_frame* frame = push_callinfo(context);
         frame->point = point;
@@ -277,6 +283,8 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
 
 static int
 _lstart(lua_State* L) {
+    struct profile_context* context = _get_profile(L);
+    context->start = true;
     lua_sethook(L, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
     return 0;
 }
