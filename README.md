@@ -2,6 +2,8 @@
 
 profile c and lua fucntion expect coroutine yield.
 
+branch [coroutine](https://github.com/lvzixun/luaprofile/tree/coroutine) is support coroutine yield.
+
 ~~~.lua
 local profile = require "profile"
 
