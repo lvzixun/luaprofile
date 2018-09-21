@@ -401,6 +401,17 @@ _lstart(lua_State* L) {
 }
 
 
+static int
+_lmark(lua_State* L) {
+    struct profile_context* context = _get_profile(L);
+    if(context->start) {
+        lua_sethook(L, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
+    }
+    lua_pushboolean(L, context->start);
+    return 1;
+}
+
+
 struct dump_arg {
     int stage;
     struct profile_context* context;
@@ -560,6 +571,7 @@ luaopen_profile_c(lua_State* L) {
      luaL_Reg l[] = {
         {"start", _lstart},
         {"stop", _lstop},
+        {"mark", _lmark},
         {NULL, NULL},
     };
     luaL_newlib(L, l);

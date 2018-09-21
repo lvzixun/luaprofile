@@ -1,4 +1,5 @@
 local c = require "profile.c"
+local mark = c.mark
 
 local M = {
     start = c.start,
@@ -11,7 +12,7 @@ local old_co_wrap = coroutine.wrap
 
 function coroutine.create(f)
     return old_co_create(function ()
-            c.start()
+            mark()
             return f()
         end)
 end
@@ -19,7 +20,7 @@ end
 
 function coroutine.wrap(f)
     return old_co_wrap(function ()
-            c.start()
+            mark()
             return f()
         end)
 end
