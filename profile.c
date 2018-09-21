@@ -17,7 +17,8 @@
 #define MICROSEC                    1000000
 #define MAX_SOURCE_LEN              128
 #define MAX_NAME_LEN                32
-#define MAX_CALL_SIZE               1024*10
+#define MAX_CALL_SIZE               256
+#define MAX_CI_SIZE                 1024*10
 #define DEFAULT_POOL_ITEM_COUNT     64
 #define LUA_PROFLIE_STATE  "__LUA_PROFILE_STATE__"
 
@@ -47,6 +48,19 @@ struct call_frame {
     double real_cost;
 };
 
+
+struct call_state {
+    int top;
+    double leave_time;
+    double enter_time;
+    struct call_frame call_list[0];
+};
+
+struct call_info {
+    struct call_state* cs;
+    lua_State* co;
+};
+
 struct profile_context {
     struct {
         struct record_item* pool;
@@ -56,68 +70,142 @@ struct profile_context {
     struct imap_context* imap;
 
     bool start;
-    int top;
-    struct call_frame call_info[0];
+    struct imap_context* co_map;
+
+    int ci_top;
+    struct call_info ci_list[0];
 };
 
 
 static struct profile_context *
 profile_create() {
     struct profile_context* context = (struct profile_context*)pmalloc(
-        sizeof(struct profile_context)+sizeof(struct call_frame)*MAX_CALL_SIZE);
-    context->top = 0;
+        sizeof(struct profile_context) + sizeof(struct call_info)*MAX_CI_SIZE);
+    
     context->start = false;
     context->imap = imap_create();
+    context->co_map = imap_create();
+    context->ci_top = 0;
     context->record_pool.pool = (struct record_item*)pmalloc(sizeof(struct record_item)*DEFAULT_POOL_ITEM_COUNT);
     context->record_pool.sz = DEFAULT_POOL_ITEM_COUNT;
     context->record_pool.cap = 0;
     return context;
 }
 
+static void
+_ob_free_call_state(uint64_t key, void* value, void* ud) {
+    pfree(value);
+}
 
 static void
 profile_free(struct profile_context* context) {
     pfree(context->record_pool.pool);
     imap_free(context->imap);
+
+    imap_dump(context->co_map, _ob_free_call_state, NULL);
+    imap_free(context->co_map);
     pfree(context);
+}
+
+static void
+_ob_reset_call_state(uint64_t key, void* value, void* ud) {
+    struct call_state* cs = (struct call_state*)value;
+    cs->top = 0;
 }
 
 
 static void
 profile_reset(struct profile_context* context) {
     context->record_pool.cap = 0;
-    context->top = 0;
+    
+    imap_dump(context->co_map, _ob_reset_call_state, NULL);
     imap_free(context->imap);
     context->imap = imap_create();
 }
 
 
-static inline struct call_frame *
+static inline struct call_info *
 push_callinfo(struct profile_context* context) {
-    if(context->top >= MAX_CALL_SIZE) {
+    if(context->ci_top >= MAX_CI_SIZE) {
         assert(false);
     }
-    return &context->call_info[context->top++];
+    return &context->ci_list[context->ci_top++];
 }
 
-static inline struct call_frame *
+
+static inline struct call_info *
 pop_callinfo(struct profile_context* context) {
-    if(context->top<=0) {
+    if(context->ci_top<=0) {
         assert(false);
     }
-    return &context->call_info[--context->top];
+    return &context->ci_list[--context->ci_top];
+}
+
+
+static struct call_state *
+get_call_state(struct profile_context* context, lua_State* co, int* co_status) {
+    int ci_top = context->ci_top;
+    struct call_info* cur_co_info = NULL;
+    struct call_info* pre_co_info = NULL;
+    if(ci_top > 0) {
+        cur_co_info = &context->ci_list[ci_top-1];
+    }
+    if(ci_top >= 2) {
+        pre_co_info = &context->ci_list[ci_top-2];
+    }
+    if(cur_co_info && cur_co_info->co == co) {
+        *co_status = 0;
+        return cur_co_info->cs;
+    }
+
+    uint64_t key = (uint64_t)((uintptr_t)co);
+    struct call_state* cs = imap_query(context->co_map, key);
+    if(cs == NULL) {
+        cs = (struct call_state*)pmalloc(sizeof(struct call_state) + sizeof(struct call_frame)*MAX_CALL_SIZE);
+        cs->top = 0;
+        cs->enter_time = 0.0;
+        cs->leave_time = 0.0;
+        imap_set(context->co_map, key, cs);
+    }
+
+    if(pre_co_info && cs == pre_co_info->cs) {  // pop co
+        *co_status = -1;
+    }else {  // push co
+        struct call_info* ci = push_callinfo(context);
+        ci->cs = cs;
+        ci->co = co;
+        *co_status = 1;
+    }
+
+    return cs;
+}
+
+
+static inline struct call_frame *
+push_callframe(struct call_state* cs) {
+    if(cs->top >= MAX_CALL_SIZE) {
+        assert(false);
+    }
+    return &cs->call_list[cs->top++];
 }
 
 static inline struct call_frame *
-cur_callinfo(struct profile_context* context) {
-    if(context->top<=0) {
+pop_callframe(struct call_state* cs) {
+    if(cs->top<=0) {
+        assert(false);
+    }
+    return &cs->call_list[--cs->top];
+}
+
+static inline struct call_frame *
+cur_callframe(struct call_state* cs) {
+    if(cs->top<=0) {
         return NULL;
     }
 
-    uint64_t idx = context->top-1;
-    return &context->call_info[idx];
+    uint64_t idx = cs->top-1;
+    return &cs->call_list[idx];
 }
-
 
 static struct record_item *
 record_item_new(struct profile_context* context) {
@@ -240,8 +328,28 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         return;
     }
 
+    int co_status = 0;
+    struct call_state* cs = get_call_state(context, L, &co_status);
+    double co_cost = 0.0;
+    if(co_status == 1) {
+        cs->enter_time = cur_time;
+        if(cs->leave_time > 0.0) {
+            co_cost = cs->enter_time - cs->leave_time;
+            assert(co_cost>0.0);
+        }
+
+    }else if(co_status == -1) {
+        struct call_info* ci = pop_callinfo(context);
+        ci->cs->leave_time = cur_time;
+        co_cost = ci->cs->leave_time - ci->cs->enter_time;
+        assert(co_cost>0.0);
+    }
+
+    #ifdef OPEN_DEBUG
+        printf("hook L:%p ci_count:%d name:%s source:%s:%d event:%d\n", L, context->ci_top, name, source, line, event);
+    #endif
     if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
-        struct call_frame* frame = push_callinfo(context);
+        struct call_frame* frame = push_callframe(cs);
         frame->point = point;
         frame->flag = flag;
         frame->tail = event == LUA_HOOKTAILCALL;
@@ -253,20 +361,21 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         frame->call_time = gettime();
 
     }else if(event == LUA_HOOKRET) {
-        int len = context->top;
+        int len = cs->top;
         if(len <= 0) {
             return;
         }
         bool tail_call = false;
         do {
-            struct call_frame* cur_frame = pop_callinfo(context);
+            struct call_frame* cur_frame = pop_callframe(cs);
+            cur_frame->sub_cost += co_cost;
             if(cur_frame->point == point || tail_call) {
                 double total_cost = cur_time - cur_frame->call_time;
                 double real_cost = total_cost - cur_frame->sub_cost;
                 cur_frame->ret_time = cur_time;
                 cur_frame->real_cost = real_cost;
                 record_item_add(context, cur_frame);
-                struct call_frame* pre_frame = cur_callinfo(context);
+                struct call_frame* pre_frame = cur_callframe(cs);
                 if(pre_frame) {
                     tail_call = cur_frame->tail;
                     cur_time = gettime();
@@ -275,6 +384,8 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
                 }else {
                     tail_call = false;
                 }
+            }else {
+                assert(false);
             }
         }while(tail_call);
     }
@@ -358,6 +469,28 @@ _item2table(lua_State* L, struct record_item* v) {
 }
 
 
+static void 
+_ob_clear(uint64_t key, void* value, void* ud) {
+    struct imap_context* co_map = (struct imap_context*)ud;
+    struct call_state* cs = (struct call_state*)value;
+    #ifdef OPEN_DEBUG
+        int i;
+        printf("---- lua_state:%llx ----\n", key);
+        for(i=0; i<cs->top; i++) {
+            struct call_frame* frame = &cs->call_list[i];
+            printf("[%d] name:%s source:%s:%d\n", i, frame->name, frame->source, frame->line);
+        }
+    #endif
+    imap_remove(co_map, key);
+    pfree(cs);
+}
+
+static void
+_clear_call_state(struct profile_context* context) {
+    imap_dump(context->co_map, _ob_clear, context->co_map);
+}
+
+
 static int
 _lstop(lua_State* L) {
     lua_sethook(L, NULL, 0, 0);
@@ -391,6 +524,8 @@ _lstop(lua_State* L) {
         lua_settable(L, -3);
     }
 
+    _clear_call_state(context);
+
     // reset
     pfree(arg.records);
     profile_reset(context);
@@ -402,20 +537,6 @@ static int
 _lprofile_gc(lua_State* L) {
     struct profile_context* context = _self(L);
     profile_free(context);
-    return 0;
-}
-
-
-static int
-_lpause(lua_State* L) {
-    lua_sethook(L, NULL, 0, 0);
-    return 0;
-}
-
-
-static int
-_lresume(lua_State* L) {
-    lua_sethook(L, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
     return 0;
 }
 
@@ -439,8 +560,6 @@ luaopen_profile_c(lua_State* L) {
      luaL_Reg l[] = {
         {"start", _lstart},
         {"stop", _lstop},
-        {"pause", _lpause},
-        {"resume", _lresume},
         {NULL, NULL},
     };
     luaL_newlib(L, l);
