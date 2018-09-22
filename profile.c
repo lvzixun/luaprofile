@@ -408,6 +408,8 @@ _lprofile_gc(lua_State* L) {
 
 static int
 _lpause(lua_State* L) {
+    struct profile_context* context = _get_profile(L);
+    context->top = 0;
     lua_sethook(L, NULL, 0, 0);
     return 0;
 }
