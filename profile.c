@@ -9,6 +9,7 @@
 
 #include "profile.h"
 #include "imap.h"
+#include "rdtsc.h"
 
 #define get_item(context, idx)    &((context)->record_pool.pool[idx])
 #define cap_item(context)         ((context)->record_pool.cap)
@@ -19,7 +20,6 @@
 #define MAX_NAME_LEN                32
 #define MAX_CALL_SIZE               1024*10
 #define DEFAULT_POOL_ITEM_COUNT     64
-#define LUA_PROFLIE_STATE  "__LUA_PROFILE_STATE__"
 
 struct record_item {
     const void* point;
@@ -28,7 +28,7 @@ struct record_item {
     char name[MAX_NAME_LEN];
     int line;
     char flag;
-    double all_cost;
+    uint64_t all_cost;
     double ave_cost;
     double percent;
 };
@@ -40,11 +40,11 @@ struct call_frame {
     bool  tail;
     char flag;
     int line;
-    double record_time;
-    double call_time;
-    double ret_time;
-    double sub_cost;
-    double real_cost;
+    uint64_t record_time;
+    uint64_t call_time;
+    uint64_t ret_time;
+    uint64_t sub_cost;
+    uint64_t real_cost;
 };
 
 struct profile_context {
@@ -60,6 +60,8 @@ struct profile_context {
     struct call_frame call_info[0];
 };
 
+
+static struct profile_context * CONTEXT = NULL;
 
 static struct profile_context *
 profile_create() {
@@ -150,7 +152,7 @@ record_item_add(struct profile_context* context, struct call_frame* frame) {
         strncpy(item->name, frame->name, sizeof(item->name));
         item->name[MAX_NAME_LEN-1] = '\0'; // padding zero terimal
         item->line = frame->line;
-        item->all_cost = 0.0;
+        item->all_cost = 0;
         item->ave_cost = 0.0;
         item->percent = 0.0;
         imap_set(context->imap, key, (void*)(pos));
@@ -163,48 +165,49 @@ record_item_add(struct profile_context* context, struct call_frame* frame) {
 }
 
 
-static double
-gettime() {
-    struct timespec ti;
-    // clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ti);
-    // clock_gettime(CLOCK_MONOTONIC, &ti);  
-    clock_gettime(CLOCK_REALTIME, &ti);  // would be faster
 
-    int sec = ti.tv_sec & 0xffff;
-    int nsec = ti.tv_nsec;
-
-    return (double)sec + (double)nsec / NANOSEC;
-}
-
-
-static inline struct profile_context *
-_profile_state(lua_State* L, int idx) {
-    struct profile_context** p = (struct profile_context**)lua_touserdata(L, idx);
-    if(p == NULL) {
-        luaL_error(L, "invalid profile state.");
+#ifdef USE_RDTSC
+    #include "rdtsc.h"
+    static inline uint64_t
+    gettime() {
+        return rdtsc();
     }
-    return *p;
-}
+
+    static inline double
+    realtime(uint64_t t) {
+        return (double) t / (2000000000);
+    }
+#else
+    static inline uint64_t
+    gettime() {
+        struct timespec ti;
+        // clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ti);
+        // clock_gettime(CLOCK_MONOTONIC, &ti);  
+        clock_gettime(CLOCK_REALTIME, &ti);  // would be faster
+
+        long sec = ti.tv_sec & 0xffff;
+        long nsec = ti.tv_nsec;
+
+        return sec * NANOSEC + nsec;
+    }
+
+    static inline double
+    realtime(uint64_t t) {
+        return (double)t / NANOSEC;
+    }
+#endif
 
 
 static inline struct profile_context *
 _get_profile(lua_State* L) {
-    lua_getfield(L, LUA_REGISTRYINDEX, LUA_PROFLIE_STATE);
-    struct profile_context* ret = _profile_state(L, -1);
-    lua_pop(L, 1);
-    return ret;
-}
-
-
-static inline struct profile_context *
-_self(lua_State* L) {
-    return _profile_state(L, 1);
+    (void)L;
+    return CONTEXT;
 }
 
 
 static void
 _resolve_hook(lua_State* L, lua_Debug* arv) {
-    double cur_time = gettime();
+    uint64_t cur_time = gettime();
     struct profile_context* context = _get_profile(L);
     if(!context->start) {
         return;
@@ -218,29 +221,30 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
     const char* name = NULL;
     char flag = 'L';
     int line = -1;
-    if(ret) {
-        lua_getinfo(L, "nSlf", &ar);
+    if(!ret) {
+        return;
+    }
+
+
+    if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
+        lua_getinfo(L, "Slf", &ar);
         point = lua_topointer(L, -1);
         line = ar.linedefined;
         source = ar.source;
-        name = ar.name;
+        // name = ar.name;
         if (ar.what[0] == 'C' && event == LUA_HOOKCALL) {
             lua_Debug ar2;
             ret = lua_getstack(L, 1, &ar2);
             flag = 'C';
             if(ret) {
-                lua_getinfo(L, "nSl", &ar2);
+                lua_getinfo(L, "Sl", &ar2);
                 if(ar2.what[0] != 'C') {
                     line = ar2.currentline;
                     source = ar2.source;
                 }
             }
         }
-    }else {
-        return;
-    }
 
-    if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
         struct call_frame* frame = push_callinfo(context);
         frame->point = point;
         frame->flag = flag;
@@ -249,7 +253,7 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         frame->name = (name)?(name):("null");
         frame->line = line;
         frame->record_time = cur_time;
-        frame->sub_cost = 0.0;
+        frame->sub_cost = 0;
         frame->call_time = gettime();
 
     }else if(event == LUA_HOOKRET) {
@@ -260,21 +264,19 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         bool tail_call = false;
         do {
             struct call_frame* cur_frame = pop_callinfo(context);
-            if(cur_frame->point == point || tail_call) {
-                double total_cost = cur_time - cur_frame->call_time;
-                double real_cost = total_cost - cur_frame->sub_cost;
-                cur_frame->ret_time = cur_time;
-                cur_frame->real_cost = real_cost;
-                record_item_add(context, cur_frame);
-                struct call_frame* pre_frame = cur_callinfo(context);
-                if(pre_frame) {
-                    tail_call = cur_frame->tail;
-                    cur_time = gettime();
-                    double s = cur_time - cur_frame->record_time;
-                    pre_frame->sub_cost += s;
-                }else {
-                    tail_call = false;
-                }
+            uint64_t total_cost = cur_time - cur_frame->call_time;
+            uint64_t real_cost = total_cost - cur_frame->sub_cost;
+            cur_frame->ret_time = cur_time;
+            cur_frame->real_cost = real_cost;
+            record_item_add(context, cur_frame);
+            struct call_frame* pre_frame = cur_callinfo(context);
+            if(pre_frame) {
+                tail_call = cur_frame->tail;
+                cur_time = gettime();
+                uint64_t s = cur_time - cur_frame->record_time;
+                pre_frame->sub_cost += s;
+            }else {
+                tail_call = false;
             }
         }while(tail_call);
     }
@@ -306,10 +308,10 @@ _observer(uint64_t key, void* value, void* ud) {
     struct record_item* item = get_item(args->context, pos-1);
 
     if(args->stage == 0) {
-        args->total += item->all_cost;
-        item->ave_cost = item->all_cost / item->count;
+        args->total += realtime(item->all_cost);
+        item->ave_cost = realtime(item->all_cost) / item->count;
     }else if(args->stage == 1) {
-        item->percent = item->all_cost / args->total;
+        item->percent = realtime(item->all_cost) / args->total;
         args->records[args->cap++] = item;
     }
 }
@@ -319,7 +321,7 @@ static int
 _compar(const void* v1, const void* v2) {
     struct record_item* a = *(struct record_item**)v1;
     struct record_item* b = *(struct record_item**)v2;
-    double f = b->all_cost - a->all_cost;
+    signed long long f = b->all_cost - a->all_cost;
     return (f<0)?(-1):(1);
 }
 
@@ -347,7 +349,7 @@ _item2table(lua_State* L, struct record_item* v) {
     lua_pushinteger(L, v->count);
     lua_setfield(L, -2, "count");
 
-    lua_pushnumber(L, v->all_cost);
+    lua_pushnumber(L, realtime(v->all_cost));
     lua_setfield(L, -2, "all_cost");
 
     lua_pushnumber(L, v->ave_cost);
@@ -398,13 +400,6 @@ _lstop(lua_State* L) {
 }
 
 
-static int
-_lprofile_gc(lua_State* L) {
-    struct profile_context* context = _self(L);
-    profile_free(context);
-    return 0;
-}
-
 
 static int
 _lpause(lua_State* L) {
@@ -422,25 +417,34 @@ _lresume(lua_State* L) {
 }
 
 
+static int
+_linit(lua_State* L) {
+    if(CONTEXT) {
+        luaL_error(L, "profile context already initialized!");
+    }
+
+    CONTEXT = profile_create();
+    return 0;
+}
+
+static int
+_ldestory(lua_State* L) {
+    if(CONTEXT) {
+        profile_free(CONTEXT);
+        CONTEXT = NULL;
+    }
+    return 0;
+}
+
+
 int
 luaopen_profile_c(lua_State* L) {
     luaL_checkversion(L);
-    lua_getfield(L, LUA_REGISTRYINDEX, LUA_PROFLIE_STATE);
-    int b = lua_toboolean(L, -1);
-    if(!b) {
-        struct profile_context* context = profile_create();
-        struct profile_context** p = (struct profile_context**)lua_newuserdata(L, sizeof(struct profile_context*));
-        *p = context;
-        if(luaL_newmetatable(L, "__LUA_PROFILE_METATABLE__")) {
-            lua_pushcfunction(L, _lprofile_gc);
-            lua_setfield(L, -2, "__gc");
-        }
-        lua_setmetatable(L, -2);
-        lua_setfield(L, LUA_REGISTRYINDEX, LUA_PROFLIE_STATE);
-    }
      luaL_Reg l[] = {
         {"start", _lstart},
         {"stop", _lstop},
+        {"init", _linit},
+        {"destory", _ldestory},
         {"pause", _lpause},
         {"resume", _lresume},
         {NULL, NULL},
