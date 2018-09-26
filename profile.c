@@ -227,11 +227,15 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
 
 
     if(event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL) {
-        lua_getinfo(L, "Slf", &ar);
+        #ifdef USE_EXPORT_NAME
+            lua_getinfo(L, "nSlf", &ar);
+            name = ar.name;
+        #else
+            lua_getinfo(L, "Slf", &ar);
+        #endif
         point = lua_topointer(L, -1);
         line = ar.linedefined;
         source = ar.source;
-        // name = ar.name;
         if (ar.what[0] == 'C' && event == LUA_HOOKCALL) {
             lua_Debug ar2;
             ret = lua_getstack(L, 1, &ar2);
