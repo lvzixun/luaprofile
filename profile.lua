@@ -1,4 +1,5 @@
 local c = require "profile.c"
+c.init()
 local mark = c.mark
 
 local M = {
