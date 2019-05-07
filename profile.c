@@ -345,15 +345,20 @@ _resolve_hook(lua_State* L, lua_Debug* arv) {
         source = ar.source;
         if (ar.what[0] == 'C' && event == LUA_HOOKCALL) {
             lua_Debug ar2;
-            ret = lua_getstack(L, 1, &ar2);
-            flag = 'C';
-            if(ret) {
-                lua_getinfo(L, "Sl", &ar2);
-                if(ar2.what[0] != 'C') {
-                    line = ar2.currentline;
-                    source = ar2.source;
+            int i=0;
+            do {
+                i++;
+                ret = lua_getstack(L, i, &ar2);
+                flag = 'C';
+                if(ret) {
+                    lua_getinfo(L, "Sl", &ar2);
+                    if(ar2.what[0] != 'C') {
+                        line = ar2.currentline;
+                        source = ar2.source;
+                        break;
+                    }
                 }
-            }
+            }while(ret);
         }
 
         struct call_frame* frame = push_callframe(cs);
