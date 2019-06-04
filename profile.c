@@ -76,8 +76,7 @@ struct profile_context {
     struct call_info ci_list[0];
 };
 
-
-static struct profile_context * CONTEXT = NULL;
+static const char KEY = 'k';
 
 static struct profile_context *
 profile_create() {
@@ -288,8 +287,10 @@ record_item_add(struct profile_context* context, struct call_frame* frame) {
 
 static inline struct profile_context *
 _get_profile(lua_State* L) {
-    (void)L;
-    return CONTEXT;
+    lua_pushlightuserdata(L, (void *)&KEY);
+    lua_gettable(L, LUA_REGISTRYINDEX);
+    size_t addr = lua_tonumber(L, -1);
+    return (struct profile_context*)addr;
 }
 
 
@@ -509,14 +510,16 @@ _clear_call_state(struct profile_context* context) {
     imap_dump(context->co_map, _ob_clear, context->co_map);
 }
 
+static void
+dump_record_items(lua_State *L, struct profile_context* context) {
+    if (!context) {
+        context = _get_profile(L);
+    }
 
-static int
-_lstop(lua_State* L) {
-    lua_sethook(L, NULL, 0, 0);
-    struct profile_context* context = _get_profile(L);
     size_t sz = context->record_pool.cap;
     size_t count = (size_t)luaL_optinteger(L, 1, sz);
     count = (count > sz)?(sz):(count);
+
     struct dump_arg arg;
     arg.context = context;
     arg.stage = 0;
@@ -543,30 +546,55 @@ _lstop(lua_State* L) {
         lua_settable(L, -3);
     }
 
-    _clear_call_state(context);
-
-    // reset
     pfree(arg.records);
+}
+
+static int
+_lstop(lua_State* L) {
+    lua_sethook(L, NULL, 0, 0);
+    struct profile_context* context = _get_profile(L);
+
+    dump_record_items(L, context);
+
+    _clear_call_state(context);
+    // reset
     profile_reset(context);
     return 1;
 }
 
 
 static int
+_ldump(lua_State* L) {
+    dump_record_items(L, NULL);
+    return 1;
+}
+
+static int
 _linit(lua_State* L) {
-    if(CONTEXT) {
+    struct profile_context* context = _get_profile(L);
+    if(context) {
         luaL_error(L, "profile context already initialized!");
     }
 
-    CONTEXT = profile_create();
+    context = profile_create();
+
+    // init registry
+    lua_pushlightuserdata(L, (void *)&KEY);
+    lua_pushnumber(L, (size_t)context);
+    lua_settable(L, LUA_REGISTRYINDEX);
     return 0;
 }
 
 static int
 _ldestory(lua_State* L) {
-    if(CONTEXT) {
-        profile_free(CONTEXT);
-        CONTEXT = NULL;
+    struct profile_context* context = _get_profile(L);
+    if(context) {
+        profile_free(context);
+
+        // reset registry
+        lua_pushlightuserdata(L, (void *)&KEY);
+        lua_pushnil(L);
+        lua_settable(L, LUA_REGISTRYINDEX);
     }
     return 0;
 }
@@ -581,6 +609,7 @@ luaopen_profile_c(lua_State* L) {
         {"mark", _lmark},
         {"init", _linit},
         {"destory", _ldestory},
+        {"dump", _ldump},
         {NULL, NULL},
     };
     luaL_newlib(L, l);
