@@ -118,7 +118,7 @@ _ob_reset_call_state(uint64_t key, void* value, void* ud) {
 static void
 profile_reset(struct profile_context* context) {
     context->record_pool.cap = 0;
-    
+    context->ci_top = 0;
     imap_dump(context->co_map, _ob_reset_call_state, NULL);
     imap_free(context->imap);
     context->imap = imap_create();
