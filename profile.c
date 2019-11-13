@@ -424,6 +424,16 @@ _lmark(lua_State* L) {
     return 1;
 }
 
+static int
+_lunmark(lua_State* L) {
+    lua_State* co = lua_tothread(L, 1);
+    if(co == NULL) {
+        co = L;
+    }
+    lua_sethook(co, NULL, 0, 0);
+    return 0;
+}
+
 
 struct dump_arg {
     int stage;
@@ -611,6 +621,7 @@ luaopen_profile_c(lua_State* L) {
         {"start", _lstart},
         {"stop", _lstop},
         {"mark", _lmark},
+        {"unmark", _lunmark},
         {"init", _linit},
         {"destory", _ldestory},
         {"dump", _ldump},
