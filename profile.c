@@ -18,8 +18,8 @@
 #define MICROSEC                    1000000
 #define MAX_SOURCE_LEN              128
 #define MAX_NAME_LEN                32
-#define MAX_CALL_SIZE               256
-#define MAX_CI_SIZE                 1024*10
+#define MAX_CALL_SIZE               1024
+#define MAX_CI_SIZE                 256
 #define DEFAULT_POOL_ITEM_COUNT     64
 
 struct record_item {
@@ -289,8 +289,8 @@ static inline struct profile_context *
 _get_profile(lua_State* L) {
     lua_pushlightuserdata(L, (void *)&KEY);
     lua_gettable(L, LUA_REGISTRYINDEX);
-    size_t addr = lua_tonumber(L, -1);
-    return (struct profile_context*)addr;
+    struct profile_context* addr = (struct profile_context*)lua_touserdata(L, -1);
+    return addr;
 }
 
 
@@ -413,8 +413,12 @@ _lstart(lua_State* L) {
 static int
 _lmark(lua_State* L) {
     struct profile_context* context = _get_profile(L);
+    lua_State* co = lua_tothread(L, 1);
+    if(co == NULL) {
+        co = L;
+    }
     if(context->start) {
-        lua_sethook(L, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
+        lua_sethook(co, _resolve_hook, LUA_MASKCALL | LUA_MASKRET, 0);
     }
     lua_pushboolean(L, context->start);
     return 1;
@@ -580,7 +584,7 @@ _linit(lua_State* L) {
 
     // init registry
     lua_pushlightuserdata(L, (void *)&KEY);
-    lua_pushnumber(L, (size_t)context);
+    lua_pushlightuserdata(L, context);
     lua_settable(L, LUA_REGISTRYINDEX);
     return 0;
 }
