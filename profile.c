@@ -560,6 +560,8 @@ _lstop(lua_State* L) {
     dump_record_items(L, context);
 
     _clear_call_state(context);
+
+    context->start = false;
     // reset
     profile_reset(context);
     return 1;
