@@ -289,6 +289,7 @@ static inline struct profile_context *
 _get_profile(lua_State* L) {
     lua_rawgetp(L, LUA_REGISTRYINDEX, (void *)&KEY);
     struct profile_context* addr = (struct profile_context*)lua_touserdata(L, -1);
+    lua_pop(L, 1);
     return addr;
 }
 
