@@ -545,9 +545,8 @@ dump_record_items(lua_State *L, struct profile_context* context) {
     int i=0;
     for(i=0; i<count; i++) {
         struct record_item* v = arg.records[i];
-        lua_pushinteger(L, i+1);
         _item2table(L, v);
-        lua_settable(L, -3);
+        lua_seti(L, -2, i+1);
     }
 
     pfree(arg.records);
