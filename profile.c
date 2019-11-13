@@ -287,8 +287,7 @@ record_item_add(struct profile_context* context, struct call_frame* frame) {
 
 static inline struct profile_context *
 _get_profile(lua_State* L) {
-    lua_pushlightuserdata(L, (void *)&KEY);
-    lua_gettable(L, LUA_REGISTRYINDEX);
+    lua_rawgetp(L, LUA_REGISTRYINDEX, (void *)&KEY);
     struct profile_context* addr = (struct profile_context*)lua_touserdata(L, -1);
     return addr;
 }
@@ -583,9 +582,8 @@ _linit(lua_State* L) {
     context = profile_create();
 
     // init registry
-    lua_pushlightuserdata(L, (void *)&KEY);
     lua_pushlightuserdata(L, context);
-    lua_settable(L, LUA_REGISTRYINDEX);
+    lua_rawsetp(L, LUA_REGISTRYINDEX, (void *)&KEY);
     return 0;
 }
 
