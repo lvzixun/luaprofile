@@ -1,8 +1,6 @@
 # lua profile lib
 
-profile c and lua fucntion expect coroutine yield.
-
-branch [coroutine](https://github.com/lvzixun/luaprofile/tree/coroutine) is support coroutine yield.
+profile c and lua fucntion and support coroutine yield.
 
 ~~~.lua
 local profile = require "profile"

@@ -1,12 +1,31 @@
 local c = require "profile.c"
 c.init()
+local mark = c.mark
 
 local M = {
     start = c.start,
     stop = c.stop,
-    pause = c.pause,
-    resume = c.resume,
 }
+
+local old_co_create = coroutine.create
+local old_co_wrap = coroutine.wrap
+
+
+function coroutine.create(f)
+    return old_co_create(function ()
+            mark()
+            return f()
+        end)
+end
+
+
+function coroutine.wrap(f)
+    return old_co_wrap(function ()
+            mark()
+            return f()
+        end)
+end
+
 
 function M.dump(records)
     local ret = {"------- dump profile -------"}
