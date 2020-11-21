@@ -12,17 +12,17 @@ local old_co_wrap = coroutine.wrap
 
 
 function coroutine.create(f)
-    return old_co_create(function ()
+    return old_co_create(function (...)
             mark()
-            return f()
+            return f(...)
         end)
 end
 
 
 function coroutine.wrap(f)
-    return old_co_wrap(function ()
+    return old_co_wrap(function (...)
             mark()
-            return f()
+            return f(...)
         end)
 end
 
