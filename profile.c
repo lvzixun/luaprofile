@@ -9,7 +9,6 @@
 
 #include "profile.h"
 #include "imap.h"
-#include "rdtsc.h"
 
 #define get_item(context, idx)    &((context)->record_pool.pool[idx])
 #define cap_item(context)         ((context)->record_pool.cap)
