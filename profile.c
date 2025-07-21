@@ -452,7 +452,7 @@ _lunmark(lua_State* L) {
 struct dump_arg {
     int stage;
     struct profile_context* context;
-    double total;
+    uint64_t total;
 
     int cap;
     struct record_item** records;
@@ -465,10 +465,10 @@ _observer(uint64_t key, void* value, void* ud) {
     struct record_item* item = get_item(args->context, pos-1);
 
     if(args->stage == 0) {
-        args->total += realtime(item->all_cost);
+        args->total += item->all_cost;
         item->ave_cost = realtime(item->all_cost) / item->count;
     }else if(args->stage == 1) {
-        item->percent = realtime(item->all_cost) / args->total;
+        item->percent = (double)(item->all_cost) / (double)(args->total);
         args->records[args->cap++] = item;
     }
 }
